@@ -19,34 +19,22 @@ package org.jetbrains.plugins.gradle.tooling.util
 
 import com.google.common.collect.ArrayListMultimap
 import com.google.common.collect.ListMultimap
-import com.google.common.collect.Lists
 import com.google.common.collect.Multimap
-import groovy.transform.CompileDynamic
 import groovy.transform.CompileStatic
 import groovy.transform.EqualsAndHashCode
 import groovy.transform.TupleConstructor
 import org.gradle.api.Project
-import org.gradle.api.artifacts.Configuration
-import org.gradle.api.artifacts.Dependency
-import org.gradle.api.artifacts.ModuleVersionIdentifier
-import org.gradle.api.artifacts.ProjectDependency
-import org.gradle.api.artifacts.PublishArtifact
-import org.gradle.api.artifacts.ResolvedArtifact
-import org.gradle.api.artifacts.SelfResolvingDependency
+import org.gradle.api.artifacts.*
 import org.gradle.api.artifacts.component.ComponentIdentifier
 import org.gradle.api.artifacts.component.ModuleComponentIdentifier
-import org.gradle.api.artifacts.component.ModuleComponentSelector
-import org.gradle.api.artifacts.component.ProjectComponentIdentifier
-import org.gradle.api.artifacts.component.ProjectComponentSelector
-import org.gradle.api.artifacts.result.*
+import org.gradle.api.artifacts.result.ComponentArtifactsResult
+import org.gradle.api.artifacts.result.ResolutionResult
 import org.gradle.api.component.Artifact
 import org.gradle.api.component.Component
 import org.gradle.api.plugins.JavaPluginConvention
 import org.gradle.api.plugins.WarPlugin
 import org.gradle.api.specs.Specs
 import org.gradle.api.tasks.SourceSet
-import org.gradle.api.tasks.SourceSetOutput
-import org.gradle.api.tasks.bundling.AbstractArchiveTask
 import org.gradle.api.tasks.compile.AbstractCompile
 import org.gradle.language.base.artifact.SourcesArtifact
 import org.gradle.language.java.artifact.JavadocArtifact
@@ -65,9 +53,8 @@ import java.util.regex.Pattern
  */
 @CompileStatic
 class DependencyResolverImpl implements DependencyResolver {
-
-  private static isArtifactResolutionQuerySupported = GradleVersion.current() >= GradleVersion.version("2.0")
-  private static isDependencySubstitutionsSupported = GradleVersion.current() > GradleVersion.version("2.5")
+  static boolean isArtifactResolutionQuerySupported = GradleVersion.current() >= GradleVersion.version("2.0")
+  static boolean isDependencySubstitutionsSupported = GradleVersion.current() > GradleVersion.version("2.5")
 
   @NotNull
   private final Project myProject
@@ -99,34 +86,36 @@ class DependencyResolverImpl implements DependencyResolver {
   }
 
   @Override
-  Collection<ExternalDependency> resolveDependencies(@Nullable String configurationName) {
+  Collection<org.jetbrains.plugins.gradle.model.ExternalDependency> resolveDependencies(@Nullable String configurationName) {
     return resolveDependencies(configurationName, null)
   }
 
-  Collection<ExternalDependency> resolveDependencies(@Nullable String configurationName, @Nullable String scope) {
+  Collection<org.jetbrains.plugins.gradle.model.ExternalDependency> resolveDependencies(
+    @Nullable String configurationName,
+    @Nullable String scope) {
     if (configurationName == null) return Collections.emptyList()
     resolveDependencies(myProject.configurations.findByName(configurationName), scope).dependencies
   }
 
   @Override
-  Collection<ExternalDependency> resolveDependencies(@Nullable Configuration configuration) {
+  Collection<org.jetbrains.plugins.gradle.model.ExternalDependency> resolveDependencies(@Nullable Configuration configuration) {
     resolveDependencies(configuration, null).dependencies
   }
 
   @CompileStatic
   @TupleConstructor
   static class ResolveDependenciesResult {
-    Collection<ExternalDependency> dependencies
+    Collection<org.jetbrains.plugins.gradle.model.ExternalDependency> dependencies
     Collection<File> files
   }
 
   ResolveDependenciesResult resolveDependencies(@Nullable Configuration configuration, @Nullable String scope) {
     if (configuration == null || configuration.allDependencies.isEmpty()) {
-      return new ResolveDependenciesResult((List<ExternalDependency>)Collections.emptyList(),
+      return new ResolveDependenciesResult((List<org.jetbrains.plugins.gradle.model.ExternalDependency>)Collections.emptyList(),
                                            (List<File>)Collections.emptyList())
     }
 
-    final Collection<ExternalDependency> result = new LinkedHashSet<>()
+    final Collection<org.jetbrains.plugins.gradle.model.ExternalDependency> result = new LinkedHashSet<>()
 
     List<File> resolvedFileDependencies = []
     if (!myIsPreview && isArtifactResolutionQuerySupported) {
@@ -221,8 +210,8 @@ class DependencyResolverImpl implements DependencyResolver {
   }
 
   @Override
-  Collection<ExternalDependency> resolveDependencies(@NotNull SourceSet sourceSet) {
-    Collection<ExternalDependency> result = new ArrayList<>()
+  Collection<org.jetbrains.plugins.gradle.model.ExternalDependency> resolveDependencies(@NotNull SourceSet sourceSet) {
+    Collection<org.jetbrains.plugins.gradle.model.ExternalDependency> result = new ArrayList<>()
 
     // resolve compile dependencies
     def compileConfigurationName = sourceSet.compileConfigurationName
@@ -231,7 +220,7 @@ class DependencyResolverImpl implements DependencyResolver {
     def compileConfiguration = compileClasspathConfiguration ?: originCompileConfiguration
 
     def compileScope = 'COMPILE'
-    Collection<ExternalDependency> compileDependencies
+    Collection<org.jetbrains.plugins.gradle.model.ExternalDependency> compileDependencies
     Collection<File> resolvedCompileFileDependencies
     resolveDependencies(compileConfiguration, compileScope).with {
       compileDependencies = dependencies
@@ -242,7 +231,7 @@ class DependencyResolverImpl implements DependencyResolver {
     def runtimeConfiguration = myProject.configurations.findByName(runtimeConfigurationName)
 
     def runtimeScope = 'RUNTIME'
-    Collection<ExternalDependency> runtimeDependencies
+    Collection<org.jetbrains.plugins.gradle.model.ExternalDependency> runtimeDependencies
     Collection<File> resolvedRuntimeFileDependencies
     resolveDependencies(runtimeConfiguration, runtimeScope).with {
       runtimeDependencies = dependencies
@@ -251,10 +240,10 @@ class DependencyResolverImpl implements DependencyResolver {
 
     def providedScope = 'PROVIDED'
 
-    ListMultimap<Object, ExternalDependency> resolvedMap = ArrayListMultimap.create()
+    ListMultimap<Object, org.jetbrains.plugins.gradle.model.ExternalDependency> resolvedMap = ArrayListMultimap.create()
 
     boolean checkCompileOnlyDeps = compileClasspathConfiguration && !originCompileConfiguration.resolvedConfiguration.hasError()
-    for (ExternalDependency compileDependency : new DependencyTraverser(compileDependencies)) {
+    for (org.jetbrains.plugins.gradle.model.ExternalDependency compileDependency : new DependencyTraverser(compileDependencies)) {
       def resolvedObj = resolve(compileDependency)
       resolvedMap.put(resolvedObj, compileDependency)
 
@@ -265,8 +254,8 @@ class DependencyResolverImpl implements DependencyResolver {
       }
     }
 
-    for (ExternalDependency runtimeDependency : new DependencyTraverser(runtimeDependencies)) {
-      Collection<ExternalDependency> dependencies = resolvedMap.get(resolve(runtimeDependency))
+    for (org.jetbrains.plugins.gradle.model.ExternalDependency runtimeDependency : new DependencyTraverser(runtimeDependencies)) {
+      Collection<org.jetbrains.plugins.gradle.model.ExternalDependency> dependencies = resolvedMap.get(resolve(runtimeDependency))
       if (dependencies && !dependencies.isEmpty() && runtimeDependency.dependencies.isEmpty()) {
         runtimeDependencies.remove(runtimeDependency)
         ((AbstractExternalDependency)runtimeDependency).scope = dependencies.first().scope
@@ -333,7 +322,7 @@ class DependencyResolverImpl implements DependencyResolver {
     resolvedDependenciesMap.putAll(runtimeScope, resolvedRuntimeFileDependencies)
     Project rootProject = myProject.rootProject
 
-    for (ExternalDependency dependency : new DependencyTraverser(result)) {
+    for (org.jetbrains.plugins.gradle.model.ExternalDependency dependency : new DependencyTraverser(result)) {
       def scope = dependency.scope
       order = -1
       if (dependency instanceof ExternalProjectDependency) {
@@ -370,8 +359,8 @@ class DependencyResolverImpl implements DependencyResolver {
           order = fileOrder != null ? fileOrder : -1
         }
       }
-      else if (dependency instanceof FileCollectionDependency) {
-        FileCollectionDependency filesDependency = FileCollectionDependency.cast(dependency)
+      else if (dependency instanceof org.jetbrains.plugins.gradle.model.FileCollectionDependency) {
+        org.jetbrains.plugins.gradle.model.FileCollectionDependency filesDependency = org.jetbrains.plugins.gradle.model.FileCollectionDependency.cast(dependency)
         for (File file : filesDependency.files) {
           resolvedDependenciesMap.put(scope, file)
           def classpathOrderMap = scope == compileScope ? compileClasspathOrder :
@@ -397,11 +386,11 @@ class DependencyResolverImpl implements DependencyResolver {
     runtimeClasspathFiles.removeAll(resolvedDependenciesMap.get(compileScope))
     runtimeClasspathFiles.removeAll(resolvedDependenciesMap.get(providedScope))
 
-    Collection<ExternalDependency> fileDependencies = new ArrayList<>()
+    Collection<org.jetbrains.plugins.gradle.model.ExternalDependency> fileDependencies = new ArrayList<>()
     mapFileDependencies(runtimeClasspathFiles, runtimeScope, fileDependencies)
     mapFileDependencies(compileClasspathFiles, compileScope, fileDependencies)
 
-    for (ExternalDependency dependency : fileDependencies) {
+    for (org.jetbrains.plugins.gradle.model.ExternalDependency dependency : fileDependencies) {
       def scope = dependency.scope
       order = -1
       if (dependency instanceof ExternalLibraryDependency) {
@@ -472,7 +461,7 @@ class DependencyResolverImpl implements DependencyResolver {
     // handle provided dependencies
     def providedConfigurations = new LinkedHashSet<Configuration>()
     resolvedMap = ArrayListMultimap.create()
-    for (ExternalDependency externalDependency : new DependencyTraverser(result)) {
+    for (org.jetbrains.plugins.gradle.model.ExternalDependency externalDependency : new DependencyTraverser(result)) {
       resolvedMap.put(resolve(externalDependency), externalDependency)
     }
     final IdeaPlugin ideaPlugin = myProject.getPlugins().findPlugin(IdeaPlugin.class)
@@ -489,13 +478,13 @@ class DependencyResolverImpl implements DependencyResolver {
     }
     for (Configuration providedConfig : providedConfigurations) {
       def providedDependencies = resolveDependencies(providedConfig, providedScope).dependencies
-      for (ExternalDependency dependency : new DependencyTraverser(providedDependencies)) {
-        Collection<ExternalDependency> dependencies = resolvedMap.get(resolve(dependency))
+      for (org.jetbrains.plugins.gradle.model.ExternalDependency dependency : new DependencyTraverser(providedDependencies)) {
+        Collection<org.jetbrains.plugins.gradle.model.ExternalDependency> dependencies = resolvedMap.get(resolve(dependency))
         if (!dependencies.isEmpty()) {
           if (providedConfig.dependencies.isEmpty()) {
             providedDependencies.remove(dependency)
           }
-          for (ExternalDependency mappedDependency : dependencies) {
+          for (org.jetbrains.plugins.gradle.model.ExternalDependency mappedDependency : dependencies) {
             ((AbstractExternalDependency)mappedDependency).scope = providedScope
           }
         }
@@ -509,13 +498,13 @@ class DependencyResolverImpl implements DependencyResolver {
     return removeDuplicates(resolvedMap, result)
   }
 
-  private static List<ExternalDependency> removeDuplicates(
-    ListMultimap<Object, ExternalDependency> resolvedMap, List<ExternalDependency> result) {
-    for (Collection<ExternalDependency> collectionOfDependencies : resolvedMap.asMap().values()) {
+  private static List<org.jetbrains.plugins.gradle.model.ExternalDependency> removeDuplicates(
+    ListMultimap<Object, org.jetbrains.plugins.gradle.model.ExternalDependency> resolvedMap, List<org.jetbrains.plugins.gradle.model.ExternalDependency> result) {
+    for (Collection<org.jetbrains.plugins.gradle.model.ExternalDependency> collectionOfDependencies : resolvedMap.asMap().values()) {
       def toRemove = []
       def isCompileScope = false
       def isProvidedScope = false
-      for (ExternalDependency externalDependency : collectionOfDependencies) {
+      for (org.jetbrains.plugins.gradle.model.ExternalDependency externalDependency : collectionOfDependencies) {
         if (externalDependency.dependencies.isEmpty()) {
           toRemove.add(externalDependency)
           if (externalDependency.scope == 'COMPILE') {
@@ -550,10 +539,10 @@ class DependencyResolverImpl implements DependencyResolver {
     p.convention.findPlugin(JavaPluginConvention)
   }
 
-  static def resolve(ExternalDependency dependency) {
+  static def resolve(org.jetbrains.plugins.gradle.model.ExternalDependency dependency) {
     if (dependency instanceof ExternalLibraryDependency) {
       return dependency.file
-    } else if (dependency instanceof FileCollectionDependency) {
+    } else if (dependency instanceof org.jetbrains.plugins.gradle.model.FileCollectionDependency) {
       return dependency.files
     } else if (dependency instanceof ExternalMultiLibraryDependency) {
       return dependency.files
@@ -564,7 +553,7 @@ class DependencyResolverImpl implements DependencyResolver {
   }
 
   private static void addSourceSetOutputDirsAsSingleEntryLibraries(
-    Collection<ExternalDependency> dependencies,
+    Collection<org.jetbrains.plugins.gradle.model.ExternalDependency> dependencies,
     SourceSet sourceSet,
     Map<File, Integer> classpathOrder,
     String scope) {
@@ -639,7 +628,7 @@ class DependencyResolverImpl implements DependencyResolver {
     null
   }
 
-  def mapFileDependencies(Set<File> fileDependencies, String scope, Collection<ExternalDependency> dependencies) {
+  def mapFileDependencies(Set<File> fileDependencies, String scope, Collection<org.jetbrains.plugins.gradle.model.ExternalDependency> dependencies) {
     File modules2Dir = new File(myProject.gradle.gradleUserHomeDir, "caches/modules-2/files-2.1")
     List toRemove = new ArrayList()
     for (File file : fileDependencies) {
@@ -701,17 +690,17 @@ class DependencyResolverImpl implements DependencyResolver {
     return name
   }
 
-  private static ModuleComponentIdentifier toComponentIdentifier(ModuleVersionIdentifier id) {
+  static ModuleComponentIdentifier toComponentIdentifier(ModuleVersionIdentifier id) {
     return new ModuleComponentIdentifierImpl(id.getGroup(), id.getName(), id.getVersion())
   }
 
-  private static ModuleComponentIdentifier toComponentIdentifier(@NotNull String group, @NotNull String module, @NotNull String version) {
+  static ModuleComponentIdentifier toComponentIdentifier(@NotNull String group, @NotNull String module, @NotNull String version) {
     return new ModuleComponentIdentifierImpl(group, module, version)
   }
 
-  private static Set<ExternalDependency> findAllFileDependencies(
+  private static Set<org.jetbrains.plugins.gradle.model.ExternalDependency> findAllFileDependencies(
     Collection<Dependency> dependencies, String scope) {
-    Set<ExternalDependency> result = new LinkedHashSet<>()
+    Set<org.jetbrains.plugins.gradle.model.ExternalDependency> result = new LinkedHashSet<>()
 
     for (Dependency dep : dependencies) {
       try {
@@ -731,11 +720,11 @@ class DependencyResolverImpl implements DependencyResolver {
     return result
   }
 
-  private Set<ExternalDependency> findDependencies(
+  private Set<org.jetbrains.plugins.gradle.model.ExternalDependency> findDependencies(
     Configuration configuration,
     Collection<Dependency> dependencies,
     String scope) {
-    Set<ExternalDependency> result = new LinkedHashSet<>()
+    Set<org.jetbrains.plugins.gradle.model.ExternalDependency> result = new LinkedHashSet<>()
 
     Set<ResolvedArtifact> resolvedArtifacts = myIsPreview ? new HashSet<ResolvedArtifact>() :
                                               configuration.resolvedConfiguration.lenientConfiguration.getArtifacts(Specs.SATISFIES_ALL)
@@ -800,247 +789,6 @@ class DependencyResolverImpl implements DependencyResolver {
     }
 
     return result
-  }
-
-  @CompileStatic
-  static class DependencyResultsTransformer {
-    Project myProject
-    Collection<DependencyResult> handledDependencyResults
-    ListMultimap<ModuleVersionIdentifier, ResolvedArtifact> artifactMap
-    Map<ComponentIdentifier, ComponentArtifactsResult> componentResultsMap
-    ListMultimap<ModuleComponentIdentifier, ProjectDependency> configurationProjectDependencies
-    String scope
-    Set<File> resolvedDepsFiles = []
-
-    DependencyResultsTransformer(
-      Project myProject,
-      ListMultimap<ModuleVersionIdentifier, ResolvedArtifact> artifactMap,
-      Map<ComponentIdentifier, ComponentArtifactsResult> componentResultsMap,
-      ListMultimap<ModuleComponentIdentifier, ProjectDependency> configurationProjectDependencies,
-      String scope) {
-      this.myProject = myProject
-      this.handledDependencyResults = Lists.newArrayList()
-      this.artifactMap = artifactMap
-      this.componentResultsMap = componentResultsMap
-      this.configurationProjectDependencies = configurationProjectDependencies
-      this.scope = scope
-    }
-
-    Set<ExternalDependency> transform(Collection<? extends DependencyResult> dependencyResults) {
-
-      Set<ExternalDependency> dependencies = new LinkedHashSet<>()
-      for (DependencyResult dependencyResult : dependencyResults) {
-
-        // dependency cycles check
-        if (!handledDependencyResults.contains(dependencyResult)) {
-          handledDependencyResults.add(dependencyResult)
-
-          if (dependencyResult instanceof ResolvedDependencyResult) {
-            def componentResult = ((ResolvedDependencyResult)dependencyResult).selected
-            def componentSelector = dependencyResult.requested
-            def componentIdentifier = toComponentIdentifier(componentResult.moduleVersion)
-            def name = componentResult.moduleVersion.name
-            def group = componentResult.moduleVersion.group
-            def version = componentResult.moduleVersion.version
-            def selectionReason = componentResult.selectionReason.description
-            if (componentSelector instanceof ProjectComponentSelector) {
-              def projectDependencies = configurationProjectDependencies.get(componentIdentifier)
-              Collection<Configuration> dependencyConfigurations
-              if(projectDependencies.isEmpty()) {
-                def dependencyProject = myProject.findProject(componentSelector.getProjectPath())
-                def dependencyProjectConfiguration = dependencyProject.getConfigurations().getByName(Dependency.DEFAULT_CONFIGURATION)
-                dependencyConfigurations = [dependencyProjectConfiguration]
-              } else {
-                dependencyConfigurations = projectDependencies.collect {it.projectConfiguration}
-              }
-
-              for (def dependencyConfig : dependencyConfigurations) {
-                if (dependencyConfig.name == Dependency.DEFAULT_CONFIGURATION) {
-                  final dependency = new DefaultExternalProjectDependency(
-                    name: name,
-                    group: group,
-                    version: version,
-                    scope: scope,
-                    selectionReason: selectionReason,
-                    projectPath: (componentSelector as ProjectComponentSelector).projectPath,
-                    configurationName: dependencyConfig.name
-                  )
-                  dependency.projectDependencyArtifacts = dependencyConfig.allArtifacts.files.files
-                  for (File file : dependency.projectDependencyArtifacts) {
-                    resolvedDepsFiles.add(file)
-                  }
-                  if (dependencyConfig.artifacts.size() == 1) {
-                    def publishArtifact = dependencyConfig.allArtifacts.first()
-                    dependency.classifier = publishArtifact.classifier
-                    dependency.packaging = publishArtifact.extension ?: 'jar'
-                  }
-
-                  if (componentResult != dependencyResult.from) {
-                    dependency.dependencies.addAll(
-                      transform(Collection.cast(componentResult.dependencies))
-                    )
-                  }
-                  dependencies.add(dependency)
-                }
-                else {
-                  final dependency = new DefaultExternalProjectDependency(
-                    name: name,
-                    group: group,
-                    version: version,
-                    scope: scope,
-                    selectionReason: selectionReason,
-                    projectPath: (componentSelector as ProjectComponentSelector).projectPath,
-                    configurationName: dependencyConfig.name
-                  )
-                  dependency.projectDependencyArtifacts = dependencyConfig.allArtifacts.files.files
-                  for (File file : dependency.projectDependencyArtifacts) {
-                    resolvedDepsFiles.add(file)
-                  }
-                  if (dependencyConfig.artifacts.size() == 1) {
-                    def publishArtifact = dependencyConfig.allArtifacts.first()
-                    dependency.classifier = publishArtifact.classifier
-                    dependency.packaging = publishArtifact.extension ?: 'jar'
-                  }
-
-                  if (componentResult != dependencyResult.from) {
-                    dependency.dependencies.addAll(
-                      transform(Collection.cast(componentResult.dependencies))
-                    )
-                  }
-                  dependencies.add(dependency)
-
-                  def files = []
-                  def artifacts = dependencyConfig.getArtifacts()
-                  if (artifacts && !artifacts.isEmpty()) {
-                    files = resolveArtifactFiles(artifacts.first())
-                  }
-
-                  if(!files.isEmpty()) {
-                    final fileCollectionDependency = new DefaultFileCollectionDependency(Collection.cast(files))
-                    fileCollectionDependency.scope = scope
-                    dependencies.add(fileCollectionDependency)
-                    resolvedDepsFiles.addAll(files)
-                  }
-                }
-              }
-            }
-            if (componentSelector instanceof ModuleComponentSelector) {
-              def artifacts = artifactMap.get(componentResult.moduleVersion) ?: [] as Collection<ResolvedArtifact>
-
-              if (artifacts?.isEmpty()) {
-                dependencies.addAll(
-                  transform(Collection.cast(componentResult.dependencies))
-                )
-              }
-              boolean first = true
-              for (ResolvedArtifact artifact : artifacts) {
-                def packaging = artifact.extension ?: 'jar'
-                def classifier = artifact.classifier
-                final dependency
-                if (isDependencySubstitutionsSupported && artifact.id.componentIdentifier instanceof ProjectComponentIdentifier) {
-                  def artifactComponentIdentifier = artifact.id.componentIdentifier as ProjectComponentIdentifier
-                  dependency = new DefaultExternalProjectDependency(
-                    name: name,
-                    group: group,
-                    version: version,
-                    scope: scope,
-                    selectionReason: selectionReason,
-                    projectPath: artifactComponentIdentifier.projectPath,
-                    configurationName: Dependency.DEFAULT_CONFIGURATION
-                  )
-                  dependency.projectDependencyArtifacts = artifactMap.get(componentResult.moduleVersion).collect { it.file }
-                  for (File file : dependency.getProjectDependencyArtifacts()) {
-                    resolvedDepsFiles.add(file)
-                  }
-                }
-                else {
-                  dependency = new DefaultExternalLibraryDependency(
-                    name: name,
-                    group: group,
-                    packaging: packaging,
-                    classifier: classifier,
-                    version: version,
-                    scope: scope,
-                    selectionReason: selectionReason,
-                    file: artifact.file
-                  )
-
-                  def artifactsResult = componentResultsMap.get(componentIdentifier)
-                  if (artifactsResult) {
-                    def sourcesResult = artifactsResult.getArtifacts(SourcesArtifact)?.find { it instanceof ResolvedArtifactResult }
-                    if (sourcesResult) {
-                      dependency.setSource(((ResolvedArtifactResult)sourcesResult).getFile())
-                    }
-                    def javadocResult = artifactsResult.getArtifacts(JavadocArtifact)?.find { it instanceof ResolvedArtifactResult }
-                    if (javadocResult) {
-                      dependency.setJavadoc(((ResolvedArtifactResult)javadocResult).getFile())
-                    }
-                  }
-                }
-                if (first) {
-                  dependency.dependencies.addAll(
-                    transform(Collection.cast(componentResult.dependencies))
-                  )
-                  first = false
-                }
-
-                dependencies.add(dependency)
-                resolvedDepsFiles.add(artifact.file)
-              }
-            }
-          }
-
-          if (dependencyResult instanceof UnresolvedDependencyResult) {
-            def unresolvedDependencyResult = (UnresolvedDependencyResult)dependencyResult
-            def componentResult = unresolvedDependencyResult.attempted
-            if (componentResult instanceof ModuleComponentSelector) {
-              final dependency = new DefaultUnresolvedExternalDependency(
-                name: componentResult.getModule(),
-                group: componentResult.getGroup(),
-                version: componentResult.getVersion(),
-                scope: scope,
-                failureMessage: unresolvedDependencyResult.failure.message
-              )
-              dependencies.add(dependency)
-            }
-          }
-        }
-      }
-
-      return dependencies
-    }
-
-    @CompileDynamic
-    private Collection<File> resolveArtifactFiles(PublishArtifact artifact) {
-      def files = []
-      if (artifact.hasProperty("archiveTask") &&
-          (artifact.archiveTask instanceof AbstractArchiveTask)) {
-        def archiveTask = artifact.archiveTask as AbstractArchiveTask
-        resolvedDepsFiles.add(new File(archiveTask.destinationDir, archiveTask.archiveName))
-
-        def mainSpec = archiveTask.mainSpec
-        def sourcePaths
-        if (mainSpec.metaClass.respondsTo(mainSpec, 'getSourcePaths')) {
-          sourcePaths = mainSpec.getSourcePaths()
-        }
-        else if (mainSpec.hasProperty('sourcePaths')) {
-          sourcePaths = mainSpec.sourcePaths
-        }
-        if (sourcePaths) {
-          for (Object path : sourcePaths.flatten()) {
-            if (path instanceof String) {
-              def file = new File(path)
-              if (file.isAbsolute()) {
-                files.add(file)
-              }
-            }
-            else if (path instanceof SourceSetOutput) {
-              files.addAll(path.files)
-            }
-          }
-        }
-      }
-    }
   }
 
   private static toMyModuleIdentifier(ModuleVersionIdentifier id) {
