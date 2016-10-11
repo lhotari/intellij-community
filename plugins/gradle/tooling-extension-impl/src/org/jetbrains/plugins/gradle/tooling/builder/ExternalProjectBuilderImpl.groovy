@@ -17,15 +17,18 @@ package org.jetbrains.plugins.gradle.tooling.builder
 
 import com.google.gson.GsonBuilder
 import com.intellij.openapi.externalSystem.model.project.ExternalSystemSourceType
+import com.intellij.openapi.externalSystem.model.project.IExternalSystemSourceType
+import groovy.transform.CompileDynamic
+import groovy.transform.CompileStatic
+import groovy.transform.TupleConstructor
 import org.gradle.api.Action
-import org.gradle.api.JavaVersion
 import org.gradle.api.Project
 import org.gradle.api.Task
 import org.gradle.api.artifacts.Configuration
 import org.gradle.api.file.ContentFilterable
 import org.gradle.api.file.FileCopyDetails
+import org.gradle.api.plugins.JavaPluginConvention
 import org.gradle.api.tasks.SourceSet
-import org.gradle.api.tasks.SourceSetContainer
 import org.gradle.api.tasks.bundling.AbstractArchiveTask
 import org.gradle.api.tasks.bundling.Jar
 import org.gradle.api.tasks.compile.JavaCompile
@@ -45,10 +48,11 @@ import java.util.concurrent.ConcurrentHashMap
  * @author Vladislav.Soroka
  * @since 12/20/13
  */
+@CompileStatic
 class ExternalProjectBuilderImpl implements ModelBuilderService {
 
-  private final cache = new ConcurrentHashMap<String, ExternalProject>()
-  private final myTasksFactory = new TasksFactory()
+  private final Map<String, ExternalProject> cache = new ConcurrentHashMap<String, ExternalProject>()
+  private final TasksFactory myTasksFactory = new TasksFactory()
   private SourceSetCachedFinder mySourceSetFinder
 
   @Override
@@ -128,7 +132,7 @@ class ExternalProjectBuilderImpl implements ModelBuilderService {
   }
 
   Map<String, ExternalTask> getTasks(Project project) {
-    def result = [:] as Map<String, DefaultExternalTask>
+    Map<String, DefaultExternalTask> result = new LinkedHashMap<String, DefaultExternalTask>()
 
     myTasksFactory.getTasks(project).each { Task task ->
       DefaultExternalTask externalTask = result.get(task.name)
@@ -150,7 +154,7 @@ class ExternalProjectBuilderImpl implements ModelBuilderService {
         externalTask.QName = task.path
       }
     }
-    result
+    Map.cast(result)
   }
 
   private Map<String, ExternalSourceSet> getSourceSets(Project project, boolean isPreview, boolean resolveSourceSetDependencies) {
@@ -159,15 +163,16 @@ class ExternalProjectBuilderImpl implements ModelBuilderService {
     boolean inheritOutputDirs = ideaPluginModule?.inheritOutputDirs ?: false
     def ideaOutDir = ideaPluginModule?.outputDir
     def ideaTestOutDir = ideaPluginModule?.testOutputDir
-    def generatedSourceDirs
-    def ideaSourceDirs
-    def ideaTestSourceDirs
+    Set<File> generatedSourceDirs
+    Set<File> ideaSourceDirs
+    Set<File> ideaTestSourceDirs
     def downloadJavadoc = false
     def downloadSources = true
     if(ideaPluginModule) {
-      generatedSourceDirs = ideaPluginModule.hasProperty("generatedSourceDirs") ? new LinkedHashSet<>(ideaPluginModule.generatedSourceDirs): null
-      ideaSourceDirs = new LinkedHashSet<>(ideaPluginModule.sourceDirs)
-      ideaTestSourceDirs = new LinkedHashSet<>(ideaPluginModule.testSourceDirs)
+      generatedSourceDirs =
+        ideaPluginModule.hasProperty("generatedSourceDirs") ? new LinkedHashSet<File>(ideaPluginModule.generatedSourceDirs) : null
+      ideaSourceDirs = new LinkedHashSet<File>(ideaPluginModule.sourceDirs)
+      ideaTestSourceDirs = new LinkedHashSet<File>(ideaPluginModule.testSourceDirs)
       downloadJavadoc = ideaPluginModule.downloadJavadoc
       downloadSources = ideaPluginModule.downloadSources
     } else {
@@ -179,35 +184,29 @@ class ExternalProjectBuilderImpl implements ModelBuilderService {
     def projectSourceCompatibility
     def projectTargetCompatibility
 
-    //noinspection GrUnresolvedAccess
-    if(project.hasProperty('sourceCompatibility') && project.sourceCompatibility instanceof JavaVersion) {
-      //noinspection GrUnresolvedAccess
-      projectSourceCompatibility = project.sourceCompatibility.name
-    }
-    //noinspection GrUnresolvedAccess
-    if(project.hasProperty('targetCompatibility') && project.targetCompatibility instanceof JavaVersion) {
-      //noinspection GrUnresolvedAccess
-      projectTargetCompatibility = project.targetCompatibility.name
-    }
+    JavaPluginConvention javaPluginConvention = getJavaPluginConvention(project)
+
+    projectSourceCompatibility = javaPluginConvention?.sourceCompatibility?.toString()
+    projectTargetCompatibility = javaPluginConvention?.targetCompatibility?.toString()
 
     def result = [:] as Map<String, ExternalSourceSet>
-    //noinspection GrUnresolvedAccess
-    if (!project.hasProperty("sourceSets") || !(project.sourceSets instanceof SourceSetContainer)) {
+    if (javaPluginConvention?.sourceSets == null) {
       return result
     }
-    //noinspection GrUnresolvedAccess
-    def sourceSets = project.sourceSets as SourceSetContainer
+    def sourceSets = javaPluginConvention.sourceSets
 
     // ignore inherited source sets from parent project
-    def parentProject = project.parent
-    if (parentProject && parentProject.hasProperty("sourceSets") && parentProject.sourceSets instanceof SourceSetContainer) {
-      if(sourceSets.is(parentProject.sourceSets)){
+    def parentProjectSourceSets = getJavaPluginConvention(project.parent)?.sourceSets
+    if (parentProjectSourceSets) {
+      if (sourceSets.is(parentProjectSourceSets)) {
         return result
       }
     }
 
-    def (resourcesIncludes, resourcesExcludes, filterReaders) = getFilters(project, 'processResources')
-    def (testResourcesIncludes, testResourcesExcludes, testFilterReaders) = getFilters(project, 'processTestResources')
+    def resourcesFilterResult = getFilters(project, 'processResources')
+    // def (resourcesIncludes, resourcesExcludes, filterReaders)
+    def testResourcesFilterResult = getFilters(project, 'processTestResources')
+    // def (testResourcesIncludes, testResourcesExcludes, testFilterReaders)
     //def (javaIncludes,javaExcludes) = getFilters(project,'compileJava')
 
     def additionalIdeaGenDirs = [] as Collection<File>
@@ -220,8 +219,8 @@ class ExternalProjectBuilderImpl implements ModelBuilderService {
 
       def javaCompileTask = project.tasks.findByName(sourceSet.compileJavaTaskName)
       if(javaCompileTask instanceof JavaCompile) {
-        externalSourceSet.sourceCompatibility = javaCompileTask.sourceCompatibility ?: projectSourceCompatibility
-        externalSourceSet.targetCompatibility = javaCompileTask.targetCompatibility ?: projectTargetCompatibility
+        externalSourceSet.sourceCompatibility = javaCompileTask.getSourceCompatibility() ?: projectSourceCompatibility
+        externalSourceSet.targetCompatibility = javaCompileTask.getTargetCompatibility() ?: projectTargetCompatibility
       } else {
         externalSourceSet.sourceCompatibility = projectSourceCompatibility
         externalSourceSet.targetCompatibility = projectTargetCompatibility
@@ -229,10 +228,10 @@ class ExternalProjectBuilderImpl implements ModelBuilderService {
 
       def jarTask = project.tasks.findByName(sourceSet.jarTaskName)
       if(jarTask instanceof AbstractArchiveTask) {
-        externalSourceSet.artifacts = [jarTask.archivePath]
+        externalSourceSet.artifacts = [jarTask.getArchivePath()]
       }
 
-      def sources = [:] as Map<ExternalSystemSourceType, ExternalSourceDirectorySet>
+      Map<IExternalSystemSourceType, ExternalSourceDirectorySet> sources = [:] as Map<IExternalSystemSourceType, ExternalSourceDirectorySet>
       ExternalSourceDirectorySet resourcesDirectorySet = new DefaultExternalSourceDirectorySet()
       resourcesDirectorySet.name = sourceSet.resources.name
       resourcesDirectorySet.srcDirs = sourceSet.resources.srcDirs
@@ -271,9 +270,9 @@ class ExternalProjectBuilderImpl implements ModelBuilderService {
           javaDirectorySet.outputDir = ideaTestOutDir
           resourcesDirectorySet.outputDir = ideaTestOutDir
         }
-        resourcesDirectorySet.excludes = testResourcesExcludes + sourceSet.resources.excludes
-        resourcesDirectorySet.includes = testResourcesIncludes + sourceSet.resources.includes
-        resourcesDirectorySet.filters = testFilterReaders
+        resourcesDirectorySet.excludes = testResourcesFilterResult.excludes + sourceSet.resources.excludes
+        resourcesDirectorySet.includes = testResourcesFilterResult.includes + sourceSet.resources.includes
+        resourcesDirectorySet.filters = testResourcesFilterResult.filterReaders
         sources.put(ExternalSystemSourceType.TEST, javaDirectorySet)
         sources.put(ExternalSystemSourceType.TEST_RESOURCE, resourcesDirectorySet)
         if(generatedDirectorySet) {
@@ -285,9 +284,9 @@ class ExternalProjectBuilderImpl implements ModelBuilderService {
           javaDirectorySet.outputDir = ideaOutDir
           resourcesDirectorySet.outputDir = ideaOutDir
         }
-        resourcesDirectorySet.excludes = resourcesExcludes + sourceSet.resources.excludes
-        resourcesDirectorySet.includes = resourcesIncludes + sourceSet.resources.includes
-        resourcesDirectorySet.filters = filterReaders
+        resourcesDirectorySet.excludes = resourcesFilterResult.excludes + sourceSet.resources.excludes
+        resourcesDirectorySet.includes = resourcesFilterResult.includes + sourceSet.resources.includes
+        resourcesDirectorySet.filters = resourcesFilterResult.filterReaders
         sources.put(ExternalSystemSourceType.SOURCE, javaDirectorySet)
         sources.put(ExternalSystemSourceType.RESOURCE, resourcesDirectorySet)
 
@@ -411,6 +410,10 @@ class ExternalProjectBuilderImpl implements ModelBuilderService {
     result
   }
 
+  JavaPluginConvention getJavaPluginConvention(Project p) {
+    p.convention.findPlugin(JavaPluginConvention)
+  }
+
   private static void cleanupSharedSourceFolders(Map<String, ExternalSourceSet> map) {
     def mainSourceSet = map[SourceSet.MAIN_SOURCE_SET_NAME]
     cleanupSharedSourceFolders(map, mainSourceSet, null)
@@ -437,13 +440,21 @@ class ExternalProjectBuilderImpl implements ModelBuilderService {
   }
 
   static <T> T chooseNotNull(T ... params) {
-    //noinspection GrUnresolvedAccess
-    params.findResult("", { it })
+    params.find { it != null }
   }
 
-  static getFilters(Project project, String taskName) {
-    def includes = []
-    def excludes = []
+  @CompileStatic
+  @TupleConstructor
+  static class FiltersResult {
+    Set<String> includes
+    Set<String> excludes
+    List<ExternalFilter> filterReaders
+  }
+
+  @CompileDynamic
+  static FiltersResult getFilters(Project project, String taskName) {
+    def includes = [] as Set
+    def excludes = [] as Set
     def filterReaders = [] as List<ExternalFilter>
     def filterableTask = project.tasks.findByName(taskName)
     if (filterableTask instanceof PatternFilterable) {
@@ -452,7 +463,7 @@ class ExternalProjectBuilderImpl implements ModelBuilderService {
     }
 
     if(System.getProperty('idea.disable.gradle.resource.filtering', 'false').toBoolean()) {
-      return [includes, excludes, filterReaders]
+      return new FiltersResult(includes, excludes, filterReaders)
     }
 
     try {
@@ -511,7 +522,7 @@ class ExternalProjectBuilderImpl implements ModelBuilderService {
 //          .withDescription("Unable to resolve resources filtering configuration").build())
     }
 
-    return [includes, excludes, filterReaders]
+    return new FiltersResult(includes, excludes, filterReaders)
   }
 
 
