@@ -187,7 +187,7 @@ class DependencyResolverImpl implements DependencyResolver {
           }
         }
 
-        def dependencyResultsTransformer = new DependencyResultsTransformer(artifactMap, componentResultsMap, configurationProjectDependencies, scope)
+        def dependencyResultsTransformer = new DependencyResultsTransformer(myProject, artifactMap, componentResultsMap, configurationProjectDependencies, scope)
         result.addAll(dependencyResultsTransformer.transform(Collection.cast(resolutionResult.root.dependencies)))
 
         resolvedFileDependencies.addAll(dependencyResultsTransformer.resolvedDepsFiles)
@@ -803,7 +803,8 @@ class DependencyResolverImpl implements DependencyResolver {
   }
 
   @CompileStatic
-  class DependencyResultsTransformer {
+  static class DependencyResultsTransformer {
+    Project myProject
     Collection<DependencyResult> handledDependencyResults
     ListMultimap<ModuleVersionIdentifier, ResolvedArtifact> artifactMap
     Map<ComponentIdentifier, ComponentArtifactsResult> componentResultsMap
@@ -812,10 +813,12 @@ class DependencyResolverImpl implements DependencyResolver {
     Set<File> resolvedDepsFiles = []
 
     DependencyResultsTransformer(
+      Project myProject,
       ListMultimap<ModuleVersionIdentifier, ResolvedArtifact> artifactMap,
       Map<ComponentIdentifier, ComponentArtifactsResult> componentResultsMap,
       ListMultimap<ModuleComponentIdentifier, ProjectDependency> configurationProjectDependencies,
       String scope) {
+      this.myProject = myProject
       this.handledDependencyResults = Lists.newArrayList()
       this.artifactMap = artifactMap
       this.componentResultsMap = componentResultsMap
