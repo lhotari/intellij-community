@@ -411,7 +411,7 @@ class ExternalProjectBuilderImpl implements ModelBuilderService {
   }
 
   JavaPluginConvention getJavaPluginConvention(Project p) {
-    p.convention.findPlugin(JavaPluginConvention)
+    p?.convention?.findPlugin(JavaPluginConvention)
   }
 
   private static void cleanupSharedSourceFolders(Map<String, ExternalSourceSet> map) {

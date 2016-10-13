@@ -52,7 +52,7 @@ class SourceSetCachedFinder {
   }
 
   JavaPluginConvention getJavaPluginConvention(Project p) {
-    p.convention.findPlugin(JavaPluginConvention)
+    p?.convention?.findPlugin(JavaPluginConvention)
   }
 
   SourceSetContainer getSourceSetContainer(Project p) {

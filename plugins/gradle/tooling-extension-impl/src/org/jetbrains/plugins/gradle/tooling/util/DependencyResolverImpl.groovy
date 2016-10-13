@@ -536,7 +536,7 @@ class DependencyResolverImpl implements DependencyResolver {
   }
 
   JavaPluginConvention getJavaPluginConvention(Project p) {
-    p.convention.findPlugin(JavaPluginConvention)
+    p?.convention?.findPlugin(JavaPluginConvention)
   }
 
   static def resolve(org.jetbrains.plugins.gradle.model.ExternalDependency dependency) {
